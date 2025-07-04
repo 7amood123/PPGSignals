@@ -1,11 +1,17 @@
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class SimpleExcelHelper {
   static Future<void> saveUserData(Map<String, String> userData) async {
     try {
+      // Request storage permission
+      await Permission.storage.request();
+      
+      // Use app documents directory (accessible via file managers)
       final directory = await getApplicationDocumentsDirectory();
-      final filePath = '${directory.path}/user_data.csv';
+      final fileName = 'ppg_user_data.csv';
+      final filePath = '${directory.path}/$fileName';
       final file = File(filePath);
       
       // Check if file exists to add headers
@@ -38,6 +44,6 @@ class SimpleExcelHelper {
   
   static Future<String> getFilePath() async {
     final directory = await getApplicationDocumentsDirectory();
-    return '${directory.path}/user_data.csv';
+    return '${directory.path}/ppg_user_data.csv';
   }
 }

@@ -1,12 +1,16 @@
 import 'dart:io';
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
 import 'package:flex_color_picker/flex_color_picker.dart';
+import 'package:fl_chart/fl_chart.dart';
 // import 'helpers/excel_helper.dart';  // Comment out Excel
 import 'helpers/simple_excel_helper.dart'; // Use CSV instead
+import 'helpers/ppg_analyzer.dart'; // Add PPG analyzer
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -25,6 +29,11 @@ class _HomePageState extends State<HomePage> {
   // Color bar properties
   Color _selectedColor = Colors.blue;
   double _brightness = 1.0; // Range from 0.0 to 1.0
+
+  // PPG Analysis properties
+  final PPGAnalyzer _ppgAnalyzer = PPGAnalyzer();
+  Timer? _ppgTimer;
+  bool _isPPGRunning = false;
 
   // Computed color with brightness applied
   Color get _adjustedColor {
@@ -50,6 +59,7 @@ class _HomePageState extends State<HomePage> {
     await Permission.camera.request();
     await Permission.storage.request();
     await Permission.photos.request();
+    // Removed manageExternalStorage permission to avoid issues
   }
 
   Future<void> initCamera() async {
@@ -135,10 +145,10 @@ class _HomePageState extends State<HomePage> {
         'Kilo': weight.text,
         'Kan Grubu': bloodType.text,
       });
-      
+
       // Get file path to show user
       String filePath = await SimpleExcelHelper.getFilePath();
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Column(
@@ -152,9 +162,7 @@ class _HomePageState extends State<HomePage> {
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
               Text(
-                filePath.contains('Download') 
-                  ? "Downloads folder → ppg_user_data.csv"
-                  : "App Documents → ppg_user_data.csv",
+                "App Documents → ppg_user_data.csv",
                 style: TextStyle(fontSize: 12),
               ),
             ],
@@ -250,8 +258,324 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void showFileLocation() async {
+    try {
+      String filePath = await SimpleExcelHelper.getFilePath();
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.folder, color: Colors.blue),
+              SizedBox(width: 8),
+              Text("File Location"),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Your data is saved as:",
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  "ppg_user_data.csv",
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: Colors.blue.shade700,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text("📱 How to find it:"),
+              const SizedBox(height: 8),
+              if (Platform.isAndroid) ...[
+                const Text("1. Open File Manager"),
+                const Text("2. Go to Android/data/"),
+                const Text("3. Find your app folder"),
+                const Text("4. Look for ppg_user_data.csv"),
+              ] else ...[
+                const Text("1. Open Files app"),
+                const Text("2. Go to 'On My iPhone'"),
+                const Text("3. Find app folder"),
+                const Text("4. Look for ppg_user_data.csv"),
+              ],
+              const SizedBox(height: 12),
+              Text(
+                "Full path:\n$filePath",
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.grey.shade600,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("OK"),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Error getting file location: $e"),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    }
+  }
+
+  // PPG Analysis Methods
+  void _startPPGAnalysis() {
+    if (!_isPPGRunning && _cameraController != null) {
+      _ppgAnalyzer.reset();
+      _isPPGRunning = true;
+
+      // Start frame processing timer
+      _ppgTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+        _processCameraFrame();
+      });
+
+      setState(() {});
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("📈 PPG Analysis Started"),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  void _stopPPGAnalysis() {
+    if (_isPPGRunning) {
+      _ppgTimer?.cancel();
+      _isPPGRunning = false;
+      setState(() {});
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("⏹️ PPG Analysis Stopped"),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  void _processCameraFrame() async {
+    if (!_isPPGRunning || _cameraController == null) return;
+
+    try {
+      double timestamp = DateTime.now().millisecondsSinceEpoch / 1000.0;
+
+      // Use simulated PPG data for demo
+      _ppgAnalyzer.processSimulatedFrame(timestamp);
+
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (e) {
+      print('Error processing frame: $e');
+    }
+  }
+
+  // PPG Chart Widget
+  Widget _buildPPGChart() {
+    return Container(
+      height: 300, // Same height as camera preview
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        border: Border.all(color: _adjustedColor, width: 2),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          // Header with heart rate
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _adjustedColor,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(10),
+                topRight: Radius.circular(10),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "📈 PPG Signal Analysis",
+                  style: TextStyle(
+                    color: _adjustedColor.computeLuminance() > 0.5
+                        ? Colors.black
+                        : Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                Text(
+                  "${_ppgAnalyzer.currentHeartRate.toStringAsFixed(0)} BPM",
+                  style: TextStyle(
+                    color: _adjustedColor.computeLuminance() > 0.5
+                        ? Colors.black
+                        : Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Chart area
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: _ppgAnalyzer.ppgData.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.monitor_heart,
+                            size: 48,
+                            color: Colors.grey.shade400,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _isPPGRunning
+                                ? "Collecting PPG data..."
+                                : "Press START to begin analysis",
+                            style: TextStyle(
+                              color: Colors.grey.shade600,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : LineChart(
+                      LineChartData(
+                        gridData: FlGridData(
+                          show: true,
+                          drawVerticalLine: true,
+                          drawHorizontalLine: true,
+                          horizontalInterval: 10,
+                          getDrawingHorizontalLine: (value) {
+                            return FlLine(
+                              color: Colors.grey.shade300,
+                              strokeWidth: 0.5,
+                            );
+                          },
+                          getDrawingVerticalLine: (value) {
+                            return FlLine(
+                              color: Colors.grey.shade300,
+                              strokeWidth: 0.5,
+                            );
+                          },
+                        ),
+                        titlesData: FlTitlesData(
+                          show: false,
+                        ),
+                        borderData: FlBorderData(show: false),
+                        lineBarsData: [
+                          LineChartBarData(
+                            spots: _ppgAnalyzer.ppgData
+                                .asMap()
+                                .entries
+                                .map((entry) => FlSpot(
+                                      entry.key.toDouble(),
+                                      entry.value.intensity,
+                                    ))
+                                .toList(),
+                            isCurved: true,
+                            color: _adjustedColor,
+                            barWidth: 2,
+                            isStrokeCapRound: true,
+                            dotData: FlDotData(show: false),
+                            belowBarData: BarAreaData(
+                              show: true,
+                              color: _adjustedColor.withOpacity(0.1),
+                            ),
+                          ),
+                        ],
+                        minY: _ppgAnalyzer.ppgData.isNotEmpty
+                            ? _ppgAnalyzer.ppgData
+                                    .map((p) => p.intensity)
+                                    .reduce(min) -
+                                5
+                            : 0,
+                        maxY: _ppgAnalyzer.ppgData.isNotEmpty
+                            ? _ppgAnalyzer.ppgData
+                                    .map((p) => p.intensity)
+                                    .reduce(max) +
+                                5
+                            : 100,
+                      ),
+                    ),
+            ),
+          ),
+          // Control buttons
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed:
+                        _isPPGRunning ? _stopPPGAnalysis : _startPPGAnalysis,
+                    icon: Icon(_isPPGRunning ? Icons.stop : Icons.play_arrow),
+                    label: Text(_isPPGRunning ? "STOP" : "START"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor:
+                          _isPPGRunning ? Colors.red : _adjustedColor,
+                      foregroundColor: _isPPGRunning
+                          ? Colors.white
+                          : (_adjustedColor.computeLuminance() > 0.5
+                              ? Colors.black
+                              : Colors.white),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    _ppgAnalyzer.reset();
+                    setState(() {});
+                  },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text("RESET"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.grey.shade600,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    _ppgTimer?.cancel();
     _cameraController?.dispose();
     super.dispose();
   }
@@ -381,6 +705,39 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 20),
 
+            // Camera preview and PPG chart side by side
+            Row(
+              children: [
+                // Camera preview
+                Expanded(
+                  child: Container(
+                    height: 300,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: _adjustedColor, width: 4),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: _adjustedColor.withOpacity(0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: CameraPreview(_cameraController!),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // PPG Analysis chart
+                Expanded(
+                  child: _buildPPGChart(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
             // Camera switch button
             Container(
               width: double.infinity,
@@ -477,24 +834,20 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
             ),
-            // Camera preview with color bar border
+            const SizedBox(height: 10),
+
+            // Show file location button
             Container(
-              height: 300,
               width: double.infinity,
-              decoration: BoxDecoration(
-                border: Border.all(color: _adjustedColor, width: 4),
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: _adjustedColor.withOpacity(0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: CameraPreview(_cameraController!),
+              child: ElevatedButton.icon(
+                onPressed: showFileLocation,
+                icon: const Icon(Icons.folder_open),
+                label: const Text("📁 SHOW FILE LOCATION"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.grey.shade600,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
               ),
             ),
             const SizedBox(height: 20),
